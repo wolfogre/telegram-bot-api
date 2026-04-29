@@ -1,18 +1,20 @@
 name: Docker multi-arch build and push
 
 on:
-  push:
-    branches:
-      - master
-  schedule:
-    - cron: '20 4 * * *'
+#  push:
+#    branches:
+#      - master
+#  schedule:
+#    - cron: '20 4 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
     name: Build Docker image (${{ matrix.arch }})
     runs-on: ubuntu-latest
     env:
-      IMAGE_TAG: ${{ secrets.DOCKERHUB_OWNER }}/telegram-bot-api
+#      IMAGE_TAG: ${{ secrets.DOCKERHUB_OWNER }}/telegram-bot-api
+      IMAGE_TAG: ghcr.io/${{ github.repository_owner }}/telegram-bot-api
       ALPINE_VERSION: '3.21'
     strategy:
       matrix:
@@ -34,6 +36,15 @@ jobs:
           repository: tdlib/telegram-bot-api
           path: telegram-bot-api
           submodules: recursive
+
+      - name: Apply idle timeout patch
+        run: |
+          # Increase HTTP idle timeout from 500s to 10800s (3h) to prevent EOF on large file downloads.
+          # Root cause: HttpInboundConnection hard-codes 500s; large file downloads take longer,
+          # causing the connection to be torn down before getFile returns.
+          # See: telegram-bot-api/HttpServer.h, td::create_actor<td::HttpInboundConnection>(..., 500, ...)
+          sed -i 's/, 500, creator_()/, 10800, creator_()/' telegram-bot-api/telegram-bot-api/HttpServer.h
+          grep -n "10800" telegram-bot-api/telegram-bot-api/HttpServer.h  # verify patch applied
 
       - name: Get version
         run: |
@@ -82,12 +93,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildx-${{ env.SAFE_ARCH }}-
 
-      - name: Login to Docker Hub registry
+#      - name: Login to Docker Hub registry
+#        uses: docker/login-action@v3
+#        if: ${{ github.event_name != 'pull_request' }}
+#        with:
+#          username: ${{ secrets.DOCKERHUB_LOGIN }}
+#          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Login to GHCR
         uses: docker/login-action@v3
         if: ${{ github.event_name != 'pull_request' }}
         with:
-          username: ${{ secrets.DOCKERHUB_LOGIN }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set build parameters
         id: build-params
@@ -169,11 +187,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Docker Hub registry
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_LOGIN }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+#      - name: Login to Docker Hub registry
+#        uses: docker/login-action@v3
+#        with:
+#          username: ${{ secrets.DOCKERHUB_LOGIN }}
+#          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Create and push manifest
         run: |
